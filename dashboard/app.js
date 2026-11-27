@@ -28,12 +28,18 @@
   }
   // The model in one function: the page recomputes a row from the snapshot figures and checks the
   // number board.json carries, so the page's code and the board's data are visibly the same arithmetic.
+  var CATEGORY_MULT = { lending: 1.35, 'liquid staking': 1.15, dex: 1.2, bridge: 1.1, 'risk curator': 1.4, stablecoin: 1.05, rwa: 1.25, oracle: 1.3, insurance: 1.2, derivatives: 1.1, 'liquid restaking': 1.1 };
+  function catMultOf(row) {
+    var c = (row.category || '').toLowerCase();
+    for (var key in CATEGORY_MULT) { if (c.indexOf(key) !== -1) return CATEGORY_MULT[key]; }
+    return 1;
+  }
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-    return Math.max(1, Math.round(row.tvl_usd * model.base_multiple * growthMult * maturity));
+    return Math.max(1, Math.round(row.tvl_usd * model.base_multiple * catMultOf(row) * growthMult * maturity));
   }
 
   function el(tag, attrs) {
@@ -107,6 +113,16 @@
     ].map(stepText);
   }
 
+  // The plan's headline figures, from the row's own record.
+  function totalCost(row) {
+    var cap = capitalFor(row);
+    return cap + 3 + 2 * Math.max(1, Math.ceil((holdDaysFor(row.age_days) / 7))) + 8;
+  }
+  function planDays(row) {
+    var h = holdDaysFor(row.age_days);
+    return h + 7 + (row.age_days === null || row.age_days < 180 ? 14 : 7);
+  }
+
   function readHash() {
     var hash = window.location.hash.replace(/^#/, '');
     if (!hash) return;
@@ -151,7 +167,10 @@
 
   function header() {
     return el('header', { class: 'top' },
-      el('div', { class: 'brand' }, el('span', { class: 'mark' }), el('span', { class: 'brand-name', text: 'Token Radar' })),
+      el('div', { class: 'brand-mark' },
+        el('span', { class: 'sweep' }),
+        el('h1', { class: 'brand' }, 'Token Radar', el('span', { class: 'sub', text: 'pre-token protocols ranked by implied value' }))
+      ),
       el('div', { class: 'top-meta' },
         el('span', { text: 'Snapshot ' + DATA.as_of }),
         el('span', { text: 'DefiLlama protocol index' }),
@@ -283,11 +302,14 @@
 
   function modelPanel() {
     var m = DATA.model;
-    return el('section', { class: 'panel model' },
+    return el('section', { class: 'model-panel' },
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula' },
-        'implied = round( tvl_usd x ' + m.base_multiple + ' x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
+        'implied = round( tvl_usd x ' + m.base_multiple + ' x category x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
+      ),
+      el('div', { class: 'cat-list' },
+        'category: risk curators 1.4 · lending 1.35 · oracles 1.3 · RWAs 1.25 · DEXes 1.2 · insurance 1.2 · bridges 1.1 · derivatives 1.1 · liquid (re)staking 1.1 · stablecoins 1.05 · everything else 1.0'
       ),
       el('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' })
     );
@@ -317,6 +339,7 @@
         el('div', null, el('span', { text: 'TVL' }), el('b', { class: 'num', text: fmtUsd(row.tvl_usd) })),
         el('div', null, el('span', { text: 'Seven-day growth' }), el('b', { class: 'num', text: fmtPct(row.change_7d) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
+        el('div', null, el('span', { text: 'Category multiplier' }), el('b', { class: 'num', text: String(catMultOf(row)) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
@@ -325,6 +348,7 @@
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
+      el('p', { class: 'sub', text: 'Total outlay about $' + totalCost(row) + ' over ' + planDays(row) + ' days, spread across fresh wallets so no single address stands out. Every figure comes from the row’s own TVL, category and age — the same derivation board.json carries.' }),
       el('ol', { class: 'steps' }, steps.map(function (s) {
         var at = s.indexOf(' Cost: ');
         var action = at >= 0 ? s.slice(0, at) : s;

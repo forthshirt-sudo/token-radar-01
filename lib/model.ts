@@ -8,11 +8,15 @@
 //
 // Implied value follows only from the snapshot's own figures:
 //
-//   base       = tvl_usd x BASE_MULTIPLE
+//   base       = tvl_usd x BASE_MULTIPLE x CATEGORY_MULT
 //   growth     = clamp(change_7d, -60, 120) per cent
 //   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
 //   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
 //   implied    = max(1, round(base x growthMult x maturity))
+//
+// CATEGORY_MULT lifts the categories whose TVL most directly implies future token demand:
+// Risk Curators 1.4x, Lending 1.35x, Oracles 1.3x, RWAs 1.25x, DEXes 1.2x,
+// Insurance 1.2x, Bridges 1.1x, Derivatives 1.1x, Liquid (Re)Staking 1.1x, Stablecoins 1.05x.
 //
 // The constants are the house model's, stated in the dashboard and changeable in the model sandbox. No
 // protocol name is ever special-cased: the same function scores every row.
@@ -71,6 +75,31 @@ export const EARLY_ROWS = 160;
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
+
+/** The model's category multipliers: how hard a category's TVL implies token value. */
+export const CATEGORY_MULT: Record<string, number> = {
+  lending: 1.35,
+  'liquid staking': 1.15,
+  dex: 1.2,
+  bridge: 1.1,
+  'risk curator': 1.4,
+  stablecoin: 1.05,
+  rwa: 1.25,
+  oracle: 1.3,
+  insurance: 1.2,
+  derivatives: 1.1,
+  'liquid restaking': 1.1,
+};
+
+/** The multiplier a protocol gets from its category, defaulting to 1. */
+function categoryMult(p: SnapshotProtocol): number {
+  const c = (p.category ?? '').toLowerCase();
+  for (const key of Object.keys(CATEGORY_MULT)) {
+    if (c.includes(key)) return CATEGORY_MULT[key]!;
+  }
+  return 1;
+}
+
 
 /** A farm step: the action, what it costs, and how long it takes. */
 export interface FarmStep {
@@ -173,16 +202,17 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
 }
 
 /** The three multipliers and the implied value one protocol gets under `model`. */
-export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null } {
+export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants): { implied: number; growthPct: number; growthMult: number; maturityMult: number; catMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const base = protocol.tvl_usd * model.base_multiple;
+  const catMult = categoryMult(protocol);
+  const base = protocol.tvl_usd * model.base_multiple * catMult;
   const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
-  return { implied, growthPct, growthMult, maturityMult, age };
+  return { implied, growthPct, growthMult, maturityMult, catMult, age };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -254,6 +284,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
       maturity_multiplier: round4(s.maturityMult),
+      category_multiplier: round4(s.catMult),
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
